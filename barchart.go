@@ -22,20 +22,22 @@ import "fmt"
 */
 type BarChart struct {
 	Block
-	BarColor   Attribute
-	TextColor  Attribute
-	NumColor   Attribute
-	NumFmt     func(int) string
-	Data       []int
-	DataLabels []string
-	BarWidth   int
-	BarGap     int
-	CellChar   rune
-	labels     [][]rune
-	dataNum    [][]rune
-	numBar     int
-	scale      float64
-	max        int
+	BarColor     Attribute
+	BarColor2    Attribute
+	TextColor    Attribute
+	NumColor     Attribute
+	NumFmt       func(int) string
+	Data         []int
+	DataLabels   []string
+	BarWidth     int
+	BarGap       int
+	CellChar     rune
+	labels       [][]rune
+	dataNum      [][]rune
+	numBar       int
+	scale        float64
+	max          int
+	HighlightBar int
 }
 
 // NewBarChart returns a new *BarChart with current theme.
@@ -43,6 +45,7 @@ func NewBarChart() *BarChart {
 	return &BarChart{
 		Block:     *NewBlock(),
 		BarColor:  ThemeAttr("barchart.bar.bg"),
+		BarColor2:  ThemeAttr("barchart.bar.bg"),
 		NumColor:  ThemeAttr("barchart.num.fg"),
 		TextColor: ThemeAttr("barchart.text.fg"),
 		NumFmt:    func(n int) string { return fmt.Sprint(n) },
@@ -96,7 +99,15 @@ func (bc *BarChart) Buffer() Buffer {
 		barFg := bc.BarColor
 
 		if bc.CellChar == ' ' {
-			barBg = bc.BarColor
+			if i%2 == 0 {
+				barBg = bc.BarColor2
+			} else {
+				barBg = bc.BarColor
+			}
+			if i == bc.HighlightBar {
+				barBg = ColorYellow
+			}
+
 			barFg = ColorDefault
 			if bc.BarColor == ColorDefault { // the same as above
 				barBg |= AttrReverse
@@ -137,7 +148,6 @@ func (bc *BarChart) Buffer() Buffer {
 				Fg: bc.NumColor,
 				Bg: barBg,
 			}
-
 			if h == 0 {
 				c.Bg = bc.Bg
 			}

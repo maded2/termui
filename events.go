@@ -6,12 +6,13 @@ package termui
 
 import (
 	"strconv"
+	"sync"
 
 	tb "github.com/nsf/termbox-go"
 )
 
 /*
-List of events:
+Here's the list of events which can be assigned handlers using Handle():
 	mouse events:
 		<MouseLeft> <MouseRight> <MouseMiddle>
 		<MouseWheelUp> <MouseWheelDown>
@@ -25,6 +26,9 @@ List of events:
 		<C-<Space>> etc
 	terminal events:
 		<Resize>
+	meta events:
+		<Keyboard>
+		<Mouse>
 */
 
 type EventType int
@@ -35,6 +39,22 @@ const (
 	ResizeEvent
 )
 
+type eventStream struct {
+	sync.RWMutex
+	handlers   map[string]func(Event)
+	stopLoop   chan bool
+	eventQueue chan tb.Event // list of events from termbox
+	hook       func(Event)
+}
+
+var defaultES = eventStream{
+	handlers:   make(map[string]func(Event)),
+	stopLoop:   make(chan bool, 1),
+	eventQueue: make(chan tb.Event),
+	hook:       DefaultHandler,
+}
+
+// Event contains an ID used for Handle() and an optional payload.
 type Event struct {
 	Type    EventType
 	ID      string
@@ -54,15 +74,74 @@ type Resize struct {
 	Height int
 }
 
-// PollEvents gets events from termbox, converts them, then sends them to each of its channels.
-func PollEvents() <-chan Event {
-	ch := make(chan Event)
+// handleEvent calls the approriate callback function if there is one.
+func handleEvent(e Event) {
+	if val, ok := defaultES.handlers[e.ID]; ok {
+		val(e)
+	}
+	switch e.Type {
+	case KeyboardEvent:
+		if val, ok := defaultES.handlers["<Keyboard>"]; ok {
+			val(e)
+		}
+	case MouseEvent:
+		if val, ok := defaultES.handlers["<Mouse>"]; ok {
+			val(e)
+		}
+	}
+}
+
+// Loop gets events from termbox and passes them off to handleEvent.
+// Stops when StopLoop is called.
+func Loop() {
 	go func() {
 		for {
-			ch <- convertTermboxEvent(tb.PollEvent())
+			defaultES.eventQueue <- tb.PollEvent()
 		}
 	}()
-	return ch
+
+	for {
+		select {
+		case <-defaultES.stopLoop:
+			return
+		case e := <-defaultES.eventQueue:
+			ne := convertTermboxEvent(e)
+			defaultES.RLock()
+			handleEvent(ne)
+			defaultES.hook(ne)
+			defaultES.RUnlock()
+		}
+	}
+}
+
+// StopLoop stops the event loop.
+func StopLoop() {
+	defaultES.stopLoop <- true
+}
+
+// Handle assigns event names to their handlers. Takes a string, strings, or a slice of strings, and a function.
+func Handle(things ...interface{}) {
+	function := things[len(things)-1].(func(Event))
+	for _, thing := range things {
+		if value, ok := thing.(string); ok {
+			defaultES.Lock()
+			defaultES.handlers[value] = function
+			defaultES.Unlock()
+		}
+		if value, ok := thing.([]string); ok {
+			defaultES.Lock()
+			for _, name := range value {
+				defaultES.handlers[name] = function
+			}
+			defaultES.Unlock()
+		}
+	}
+}
+
+func EventHook(f func(Event)) {
+	defaultES.Lock()
+	defaultES.hook = f
+	defaultES.Unlock()
 }
 
 // convertTermboxKeyboardEvent converts a termbox keyboard event to a more friendly string format.
@@ -83,7 +162,7 @@ func convertTermboxKeyboardEvent(e tb.Event) Event {
 			k = ks[0xFFFF-int(e.Key)-12]
 		}
 
-		if e.Key <= 0x7F {
+		if e.Key <= 0x7F || e.Key >= tb.KeyF10 {
 			pre = "<C-"
 			k = string('a' - 1 + int(e.Key))
 			kmap := map[tb.Key][2]string{
@@ -96,6 +175,16 @@ func convertTermboxKeyboardEvent(e tb.Event) Event {
 				tb.KeyCtrlSlash:     {"C-", "/"},
 				tb.KeySpace:         {"", "<Space>"},
 				tb.KeyCtrl8:         {"C-", "8"},
+				tb.KeyF1:         {"", "<F1>"},
+				tb.KeyF2:         {"", "<F2>"},
+				tb.KeyF3:         {"", "<F3>"},
+				tb.KeyF4:         {"", "<F4>"},
+				tb.KeyF5:         {"", "<F5>"},
+				tb.KeyF6:         {"", "<F6>"},
+				tb.KeyF7:         {"", "<F7>"},
+				tb.KeyF8:         {"", "<F8>"},
+				tb.KeyF9:         {"", "<F9>"},
+				tb.KeyF10:         {"", "<F10>"},
 			}
 			if sk, ok := kmap[e.Key]; ok {
 				pre = sk[0]
@@ -153,15 +242,13 @@ func convertTermboxEvent(e tb.Event) Event {
 		panic(e.Err)
 	}
 
-	var event Event
-
 	switch e.Type {
 	case tb.EventKey:
-		event = convertTermboxKeyboardEvent(e)
+		return convertTermboxKeyboardEvent(e)
 	case tb.EventMouse:
-		event = convertTermboxMouseEvent(e)
+		return convertTermboxMouseEvent(e)
 	case tb.EventResize:
-		event = Event{
+		return Event{
 			Type: ResizeEvent,
 			ID:   "<Resize>",
 			Payload: Resize{
@@ -171,5 +258,20 @@ func convertTermboxEvent(e tb.Event) Event {
 		}
 	}
 
-	return event
+	return Event{}
+}
+
+var DefaultHandler = func(e Event) {
+}
+
+func ResetHandlers() {
+	defaultES.Lock()
+	defaultES.handlers = make(map[string]func(Event))
+	defaultES.Unlock()
+}
+
+func ResetHandler(handle string) {
+	defaultES.Lock()
+	delete(defaultES.handlers, handle)
+	defaultES.Unlock()
 }
